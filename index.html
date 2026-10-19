@@ -152,6 +152,15 @@ const COLORS = {
   'أسود': '#1C1C1C', 'أبيض': '#FFFFFF', 'بيج': '#D9C9B0', 'وردي': '#E8B9C0', 'أحمر': '#B3263A',
   'كحلي': '#25324D', 'زيتي': '#5E6B47', 'بني': '#7A4B3A', 'ذهبي': '#C7A86B', 'رمادي': '#9A9A9A', 'سماوي': '#B8CBE0', 'خمري': '#5A1F2E'
 };
+/* مجموعات المقاسات الجاهزة — تقدر تضيف أو تشيل منها */
+const SIZE_GROUPS = [
+  { name: 'ملابس', sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL'] },
+  { name: 'عبايات وثياب', sizes: ['50', '52', '54', '56', '58', '60', '62'] },
+  { name: 'أحذية', sizes: ['36', '37', '38', '39', '40', '41', '42', '43', '44', '45'] },
+  { name: 'أطفال', sizes: ['0-6 شهور', '6-12 شهر', '1-2 سنة', '2-3 سنة', '4-5 سنة', '6-7 سنة', '8-9 سنة', '10-12 سنة'] },
+  { name: 'أخرى', sizes: ['مقاس واحد', 'فري سايز'] }
+];
+const PRESET_SIZES = SIZE_GROUPS.flatMap(g => g.sizes);
 const STATUS = {
   pending_payment: 'بانتظار تأكيد الدفع', confirmed: 'تم تأكيد الدفع', preparing: 'قيد التجهيز',
   shipped: 'تم الشحن', delivered: 'تم التوصيل', cancelled: 'ملغي'
@@ -386,7 +395,16 @@ function sheetProduct() {
         <div class="field"><label for="p-old">السعر قبل الخصم (اختياري)</label><input id="p-old" name="old_price" type="number" inputmode="numeric" min="0" value="${esc(p.old_price || '')}"></div>
       </div>
       <div class="field"><span>الألوان</span><div class="sw">${Object.keys(COLORS).map(c => `<label><input type="checkbox" name="colors" value="${esc(c)}" ${p.colors.includes(c) ? 'checked' : ''}><i style="background:${COLORS[c]}"></i>${esc(c)}</label>`).join('')}</div></div>
-      <div class="field"><label for="p-sizes">المقاسات (افصلي بينها بفاصلة)</label><input id="p-sizes" name="sizes" value="${esc(p.sizes.join('، '))}" placeholder="S، M، L، XL"></div>
+      <div class="field"><span>المقاسات <small class="muted">(اختاري المتوفر)</small></span>
+        ${SIZE_GROUPS.map(g => `<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px"><small class="muted">${esc(g.name)}</small>
+          <div class="sw">${g.sizes.map(s => `<label><input type="checkbox" name="sizes" value="${esc(s)}" ${p.sizes.includes(s) ? 'checked' : ''}>${esc(s)}</label>`).join('')}</div></div>`).join('')}
+        ${(() => { const extra = [...new Set([...p.sizes, ...(A.open.extraSizes || [])])].filter(s => !PRESET_SIZES.includes(s)); return extra.length ? `<div style="display:flex;flex-direction:column;gap:6px;margin-top:6px"><small class="muted">مقاسات أضفتيها</small>
+          <div class="sw">${extra.map(s => `<label><input type="checkbox" name="sizes" value="${esc(s)}" ${p.sizes.includes(s) ? 'checked' : ''}>${esc(s)}</label>`).join('')}</div></div>` : ''; })()}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input id="p-newsize" placeholder="مقاس جديد، مثلاً 46 أو 13 سنة" aria-label="مقاس جديد" style="flex:1;min-width:0">
+          <button type="button" class="btn ghost sm" data-act="add-size" style="height:44px">+ إضافة</button>
+        </div>
+      </div>
       <div class="field"><label for="p-desc">الوصف</label><textarea id="p-desc" name="description" rows="3">${esc(p.description || '')}</textarea></div>
       <label class="check"><input type="checkbox" name="is_new" ${p.is_new ? 'checked' : ''}> يظهر في "وصل جديد"</label>
       <label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> ظاهر في المتجر</label>
@@ -401,7 +419,8 @@ function readProductForm() {
   p.name = f.namedItem('name').value.trim(); p.category = f.namedItem('category').value; p.tag = f.namedItem('tag').value.trim();
   p.price = f.namedItem('price').value; p.old_price = f.namedItem('old_price').value;
   p.colors = [...form.querySelectorAll('input[name="colors"]:checked')].map(i => i.value);
-  p.sizes = f.namedItem('sizes').value.split(/[,،]/).map(s => s.trim()).filter(Boolean);
+  const picked = [...form.querySelectorAll('input[name="sizes"]:checked')].map(i => i.value);
+  p.sizes = [...PRESET_SIZES.filter(s => picked.includes(s)), ...picked.filter(s => !PRESET_SIZES.includes(s))];
   p.description = f.namedItem('description').value.trim(); p.is_new = f.namedItem('is_new').checked; p.active = f.namedItem('active').checked;
 }
 async function saveProduct() {
@@ -492,6 +511,16 @@ document.addEventListener('click', async e => {
   if (d.act === 'new-product') return openProduct(null);
   if (d.edit) return openProduct(A.products.find(p => p.id === Number(d.edit)));
   if (d.act === 'save-product') return saveProduct();
+  if (d.act === 'add-size') {
+    const inp = $('#p-newsize'), v = inp ? inp.value.trim().slice(0, 30) : '';
+    if (!v) { toast('اكتبي المقاس أول'); return; }
+    readProductForm();
+    const p = A.open.data;
+    if (!p.sizes.includes(v)) p.sizes.push(v);
+    A.open.extraSizes = [...new Set([...(A.open.extraSizes || []), v])];
+    renderSheet(); toast('انضاف المقاس');
+    return;
+  }
   if (d.rmImg) { readProductForm(); A.open.data.images.splice(Number(d.rmImg), 1); renderSheet(); return; }
   if (d.mainImg) { readProductForm(); const im = A.open.data.images, i = Number(d.mainImg); im.unshift(im.splice(i, 1)[0]); renderSheet(); return; }
   if (d.toggle) { const p = A.products.find(x => x.id === Number(d.toggle)); const { error } = await db.from('products').update({ active: !p.active }).eq('id', p.id); if (!error) { p.active = !p.active; render(); } return; }
@@ -529,7 +558,10 @@ document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = e.target, k = f.dataset.form;
   if (k === 'login') return login(f.querySelector('#em').value.trim(), f.querySelector('#pw').value);
-  if (k === 'product') return saveProduct();
+  if (k === 'product') {
+    if (document.activeElement && document.activeElement.id === 'p-newsize') { const b = document.querySelector('[data-act="add-size"]'); if (b) b.click(); return; }
+    return saveProduct();
+  }
   if (k === 'coupon') {
     const el = f.elements;
     const row = { code: el.namedItem('code').value.trim().toUpperCase(), kind: el.namedItem('kind').value, value: parseInt(el.namedItem('value').value, 10), label: el.namedItem('label').value.trim() || null, active: true };
@@ -546,7 +578,10 @@ document.addEventListener('submit', async e => {
     if (error) toast(error.code === '23505' ? 'المحافظة موجودة' : 'ما انضافت'); else { toast('انضافت المحافظة'); loadTab(); }
   }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape' && A.open) { A.open = null; renderSheet(); } });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && A.open) { A.open = null; renderSheet(); }
+  if (e.key === 'Enter' && e.target.id === 'p-newsize') { e.preventDefault(); const b = document.querySelector('[data-act="add-size"]'); if (b) b.click(); }
+});
 
 boot();
 </script>
