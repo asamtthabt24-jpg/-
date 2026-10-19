@@ -193,6 +193,41 @@ function waNumber(phone) {
 }
 function uid() { return crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(16).slice(2); }
 
+/* يشرح سبب الخطأ بكلام واضح */
+function explainError(e) {
+  const m = ((e && (e.message || e.error || '')) + ' ' + (e && e.code || '') + ' ' + (e && e.statusCode || '')).toLowerCase();
+  if (m.includes('jwt') || m.includes('expired') || m.includes('invalid claim')) return 'انتهت جلسة الدخول. اطلعي وادخلي مرة ثانية.';
+  if (m.includes('42p01') || m.includes('does not exist')) return 'الجداول مو موجودة في Supabase. شغّلي ملف schema.sql كامل في SQL Editor.';
+  if (m.includes('bucket not found')) return 'مكان تخزين الصور مو موجود. شغّلي ملف fix.sql في SQL Editor.';
+  if (m.includes('row-level security') || m.includes('violates row level') || m.includes('unauthorized') || m.includes('403')) return 'قاعدة البيانات رفضت الحفظ لأن إيميلك مو مسجل كمشرف بنفس الكتابة. شغّلي ملف fix.sql في SQL Editor.';
+  if (m.includes('42501') || m.includes('permission denied')) return 'ما فيه صلاحية على الجدول. شغّلي ملف fix.sql في SQL Editor.';
+  if (m.includes('mime') || m.includes('invalid_mime') || m.includes('415')) return 'نوع الصورة غير مدعوم. استخدمي صورة JPG أو PNG.';
+  if (m.includes('payload too large') || m.includes('413') || m.includes('maximum allowed size')) return 'الصورة كبيرة. جربي صورة أصغر.';
+  if (m.includes('failed to fetch') || m.includes('network')) return 'فيه مشكلة في الاتصال بالإنترنت. تأكدي من النت وحاولي مرة ثانية.';
+  return 'صار خطأ أثناء الحفظ.';
+}
+function errBox(e) {
+  const raw = e ? [e.code, e.statusCode, e.message].filter(Boolean).join(' · ') : '';
+  return `<div class="note bad">${esc(explainError(e))}${raw ? `<br><small class="ltr" style="opacity:.8">${esc(raw)}</small>` : ''}</div>`;
+}
+/* تصغير الصورة قبل الرفع (أسرع وما تتجاوز الحد) */
+function shrinkImage(file, max = 1600, quality = 0.85) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const r = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * r); c.height = Math.round(img.height * r);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(b => resolve(b || file), 'image/jpeg', quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
 /* ===== الحالة ===== */
 const A = {
   user: null, isAdmin: false, tab: 'orders', loginErr: '', busy: false,
@@ -433,22 +468,24 @@ async function saveProduct() {
     images: p.images, tag: p.tag || null, description: p.description || null, is_new: p.is_new, active: p.active };
   const q = p.id ? db.from('products').update(row).eq('id', p.id) : db.from('products').insert(row);
   const { error } = await q;
-  if (error) { err.innerHTML = '<div class="note bad">ما انحفظ المنتج، حاولي مرة ثانية</div>'; console.error(error); return; }
+  if (error) { err.innerHTML = errBox(error); err.scrollIntoView({ block: 'center' }); console.error(error); return; }
   toast('انحفظ المنتج'); A.open = null; renderSheet(); loadTab();
 }
 async function uploadImages(files) {
   readProductForm();
   const p = A.open.data;
   A.open.uploading = files.length; renderSheet();
+  let lastErr = null;
   for (const file of files) {
-    if (file.size > 5 * 1024 * 1024) { toast('صورة أكبر من ٥ ميجا، تخطيناها'); A.open.uploading--; continue; }
-    const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '') || 'jpg';
-    const path = 'p/' + uid() + '.' + ext;
-    const { error } = await db.storage.from('product-images').upload(path, file, { contentType: file.type, upsert: false });
-    if (error) { toast('ما قدرنا نرفع صورة'); console.error(error); }
+    const blob = await shrinkImage(file);
+    if (!blob) { lastErr = { message: 'invalid_mime' }; A.open.uploading--; renderSheet(); continue; }
+    const path = 'p/' + uid() + '.jpg';
+    const { error } = await db.storage.from('product-images').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+    if (error) { lastErr = error; console.error(error); }
     else p.images.push(db.storage.from('product-images').getPublicUrl(path).data.publicUrl);
     A.open.uploading--; renderSheet();
   }
+  if (lastErr) { const box = $('#perr'); if (box) { box.innerHTML = errBox(lastErr); box.scrollIntoView({ block: 'center' }); } toast('ما قدرنا نرفع صورة'); }
 }
 
 /* ----- الكوبونات ----- */
